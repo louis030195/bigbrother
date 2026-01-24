@@ -2,12 +2,13 @@ use anyhow::{Context, Result};
 use chrono::Local;
 use cidre::ax;
 use csv::Writer;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct DiscordMessage {
     timestamp: String,
     username: String,
@@ -24,7 +25,6 @@ fn open_url(url: &str) -> Result<()> {
 }
 
 fn find_browser_pid() -> Result<i32> {
-    // Common browsers to check
     let browsers = [
         "Arc",
         "Google Chrome",
@@ -57,11 +57,36 @@ fn find_browser_pid() -> Result<i32> {
     anyhow::bail!("No browser found running. Please open a browser first.")
 }
 
+fn get_browser_name() -> Option<String> {
+    let browsers = [
+        "Arc",
+        "Google Chrome",
+        "Safari",
+        "Firefox",
+        "Brave Browser",
+        "Microsoft Edge",
+        "Opera",
+        "Vivaldi",
+    ];
+
+    for browser in browsers {
+        let output = Command::new("pgrep")
+            .arg("-x")
+            .arg(browser)
+            .output()
+            .ok()?;
+
+        if output.status.success() {
+            return Some(browser.to_string());
+        }
+    }
+    None
+}
+
 fn find_browser_app() -> Result<cidre::arc::R<ax::UiElement>> {
     let pid = find_browser_pid()?;
     let app = ax::UiElement::with_app_pid(pid);
 
-    // Verify we can access it
     let role = app.role().context("Failed to access browser - check accessibility permissions")?;
     println!("Browser role: {}", extract_role_name(&role));
 
@@ -84,9 +109,7 @@ fn get_string_attr(element: &ax::UiElement, attr: &ax::Attr) -> Option<String> {
 
 fn extract_role_name(role: &cidre::arc::R<ax::Role>) -> String {
     let debug = format!("{:?}", role);
-    // Extract just the role name from "Retained(Role(String(AXGroup)))" -> "AXGroup"
     if let Some(start) = debug.find("AX") {
-        // Find the end - either ) or " or }
         let rest = &debug[start..];
         let end = rest.find(|c| c == ')' || c == '"' || c == '}').unwrap_or(rest.len());
         return rest[..end].to_string();
@@ -106,7 +129,6 @@ fn scrape_messages_recursive(
     let role = element.role().ok().map(|r| extract_role_name(&r));
     let role_desc = element.role_desc().ok().map(|s| s.to_string());
 
-    // Try to get value/content from the element
     if let Some(text) = get_string_attr(element, ax::attr::value()) {
         if !text.is_empty() && text.len() > 2 {
             let msg = DiscordMessage {
@@ -118,7 +140,6 @@ fn scrape_messages_recursive(
         }
     }
 
-    // Also try title attribute
     if let Some(text) = get_string_attr(element, ax::attr::title()) {
         if !text.is_empty() && text.len() > 2 {
             let msg = DiscordMessage {
@@ -130,7 +151,6 @@ fn scrape_messages_recursive(
         }
     }
 
-    // Try description attribute
     if let Some(text) = get_string_attr(element, ax::attr::desc()) {
         if !text.is_empty() && text.len() > 2 {
             let msg = DiscordMessage {
@@ -142,12 +162,40 @@ fn scrape_messages_recursive(
         }
     }
 
-    // Recurse into children
     if let Ok(children) = element.children() {
         for child in children.iter() {
             scrape_messages_recursive(child, messages, depth + 1);
         }
     }
+}
+
+fn scroll_up_in_browser(browser_name: &str, times: u32) -> Result<()> {
+    // Use AppleScript to send Page Up key to the browser
+    let script = format!(
+        r#"
+        tell application "{}"
+            activate
+        end tell
+        delay 0.3
+        tell application "System Events"
+            repeat {} times
+                key code 116 -- Page Up
+                delay 0.5
+            end repeat
+        end tell
+        "#,
+        browser_name, times
+    );
+
+    Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+        .context("Failed to execute scroll script")?;
+
+    // Wait for Discord to load more messages
+    thread::sleep(Duration::from_millis(800));
+    Ok(())
 }
 
 fn scrape_browser() -> Result<Vec<DiscordMessage>> {
@@ -157,10 +205,47 @@ fn scrape_browser() -> Result<Vec<DiscordMessage>> {
     println!("Scraping browser UI...");
     scrape_messages_recursive(&app, &mut messages, 0);
 
-    // Deduplicate messages
     messages.dedup_by(|a, b| a.content == b.content);
 
     Ok(messages)
+}
+
+fn scrape_with_scrolling(scroll_iterations: u32) -> Result<Vec<DiscordMessage>> {
+    let browser_name = get_browser_name().context("No browser found")?;
+    let mut all_messages: Vec<DiscordMessage> = Vec::new();
+    let mut seen_content: HashSet<String> = HashSet::new();
+
+    println!("Will scroll {} times to load more messages...", scroll_iterations);
+
+    for i in 0..=scroll_iterations {
+        if i > 0 {
+            print!("Scrolling up ({}/{})... ", i, scroll_iterations);
+            std::io::Write::flush(&mut std::io::stdout())?;
+            scroll_up_in_browser(&browser_name, 5)?; // 5 page-ups per iteration
+            println!("done");
+        }
+
+        let messages = scrape_browser()?;
+        let mut new_count = 0;
+
+        for msg in messages {
+            if !seen_content.contains(&msg.content) {
+                seen_content.insert(msg.content.clone());
+                all_messages.push(msg);
+                new_count += 1;
+            }
+        }
+
+        println!("  Found {} new elements (total: {})", new_count, all_messages.len());
+
+        // If no new messages found, we might have reached the top
+        if i > 0 && new_count == 0 {
+            println!("No new messages found, may have reached channel start.");
+            break;
+        }
+    }
+
+    Ok(all_messages)
 }
 
 fn save_to_csv(messages: &[DiscordMessage], path: &PathBuf) -> Result<()> {
@@ -202,6 +287,20 @@ fn ensure_accessibility_permissions() -> Result<()> {
     Ok(())
 }
 
+fn print_usage() {
+    println!("Usage: scrape-cidre [OPTIONS] <discord-url>");
+    println!();
+    println!("Options:");
+    println!("  --scrolls <N>  Number of scroll iterations (default: 0)");
+    println!("                 Each iteration scrolls up ~5 pages");
+    println!("  --days <N>     Approximate days of history (1 day ≈ 3 scrolls)");
+    println!();
+    println!("Examples:");
+    println!("  scrape-cidre https://discord.com/channels/123/456");
+    println!("  scrape-cidre --scrolls 10 https://discord.com/channels/123/456");
+    println!("  scrape-cidre --days 7 https://discord.com/channels/123/456");
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
@@ -209,30 +308,59 @@ fn main() -> Result<()> {
     println!("===============================================");
     println!();
 
+    // Parse arguments
+    let mut scroll_iterations: u32 = 0;
+    let mut url: Option<String> = None;
+    let mut i = 1;
+
+    while i < args.len() {
+        match args[i].as_str() {
+            "--scrolls" => {
+                i += 1;
+                if i < args.len() {
+                    scroll_iterations = args[i].parse().unwrap_or(0);
+                }
+            }
+            "--days" => {
+                i += 1;
+                if i < args.len() {
+                    let days: u32 = args[i].parse().unwrap_or(1);
+                    scroll_iterations = days * 3; // ~3 scroll iterations per day
+                }
+            }
+            "--help" | "-h" => {
+                print_usage();
+                return Ok(());
+            }
+            arg if arg.starts_with("https://discord.com/") => {
+                url = Some(arg.to_string());
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
     // Check permissions first
     ensure_accessibility_permissions()?;
 
-    if args.len() > 1 {
-        let url = &args[1];
-
-        if !url.starts_with("https://discord.com/") {
-            anyhow::bail!("URL must be a Discord URL (https://discord.com/...)");
-        }
-
-        open_url(url)?;
-
+    if let Some(ref discord_url) = url {
+        open_url(discord_url)?;
         println!("Waiting for browser to load...");
         thread::sleep(Duration::from_secs(5));
     } else {
-        println!("Usage: scrape-cidre <discord-url>");
-        println!("Example: scrape-cidre https://discord.com/channels/1255148501793243136/1255148503081156642");
+        print_usage();
         println!();
         println!("Running without URL - will scrape current browser window.");
         println!();
     }
 
-    let messages = scrape_browser()?;
-    println!("Found {} text elements", messages.len());
+    let messages = if scroll_iterations > 0 {
+        scrape_with_scrolling(scroll_iterations)?
+    } else {
+        scrape_browser()?
+    };
+
+    println!("Found {} total text elements", messages.len());
 
     if messages.is_empty() {
         println!("No messages found. Make sure Discord is visible in the browser.");
