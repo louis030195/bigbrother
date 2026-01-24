@@ -23,14 +23,47 @@ fn open_url(url: &str) -> Result<()> {
     Ok(())
 }
 
-fn find_browser_app() -> Result<cidre::arc::R<ax::UiElement>> {
-    let system_wide = ax::UiElement::sys_wide();
-    let app = system_wide
-        .focused_app()
-        .context("Failed to get focused application")?;
+fn find_browser_pid() -> Result<i32> {
+    // Common browsers to check
+    let browsers = [
+        "Arc",
+        "Google Chrome",
+        "Safari",
+        "Firefox",
+        "Brave Browser",
+        "Microsoft Edge",
+        "Opera",
+        "Vivaldi",
+    ];
 
-    let role_desc = app.role_desc().ok().map(|s| s.to_string());
-    println!("Focused app: {:?}", role_desc);
+    for browser in browsers {
+        let output = Command::new("pgrep")
+            .arg("-x")
+            .arg(browser)
+            .output()
+            .context("Failed to run pgrep")?;
+
+        if output.status.success() {
+            let pid_str = String::from_utf8_lossy(&output.stdout);
+            if let Some(first_line) = pid_str.lines().next() {
+                if let Ok(pid) = first_line.trim().parse::<i32>() {
+                    println!("Found browser: {} (PID: {})", browser, pid);
+                    return Ok(pid);
+                }
+            }
+        }
+    }
+
+    anyhow::bail!("No browser found running. Please open a browser first.")
+}
+
+fn find_browser_app() -> Result<cidre::arc::R<ax::UiElement>> {
+    let pid = find_browser_pid()?;
+    let app = ax::UiElement::with_app_pid(pid);
+
+    // Verify we can access it
+    let role = app.role().context("Failed to access browser - check accessibility permissions")?;
+    println!("Browser role: {}", extract_role_name(&role));
 
     Ok(app)
 }
@@ -49,6 +82,18 @@ fn get_string_attr(element: &ax::UiElement, attr: &ax::Attr) -> Option<String> {
         })
 }
 
+fn extract_role_name(role: &cidre::arc::R<ax::Role>) -> String {
+    let debug = format!("{:?}", role);
+    // Extract just the role name from "Retained(Role(String(AXGroup)))" -> "AXGroup"
+    if let Some(start) = debug.find("AX") {
+        // Find the end - either ) or " or }
+        let rest = &debug[start..];
+        let end = rest.find(|c| c == ')' || c == '"' || c == '}').unwrap_or(rest.len());
+        return rest[..end].to_string();
+    }
+    "Unknown".to_string()
+}
+
 fn scrape_messages_recursive(
     element: &ax::UiElement,
     messages: &mut Vec<DiscordMessage>,
@@ -58,7 +103,7 @@ fn scrape_messages_recursive(
         return;
     }
 
-    let role = element.role().ok().map(|r| format!("{:?}", r));
+    let role = element.role().ok().map(|r| extract_role_name(&r));
     let role_desc = element.role_desc().ok().map(|s| s.to_string());
 
     // Try to get value/content from the element
@@ -105,30 +150,11 @@ fn scrape_messages_recursive(
     }
 }
 
-fn scrape_focused_app() -> Result<Vec<DiscordMessage>> {
-    // Retry a few times in case app isn't focused yet
-    let mut app = None;
-    for attempt in 1..=5 {
-        match find_browser_app() {
-            Ok(a) => {
-                app = Some(a);
-                break;
-            }
-            Err(e) => {
-                if attempt < 5 {
-                    println!("Attempt {}/5: Waiting for focused app... ({:?})", attempt, e);
-                    thread::sleep(Duration::from_secs(1));
-                } else {
-                    return Err(e);
-                }
-            }
-        }
-    }
-
-    let app = app.context("Failed to find focused application")?;
+fn scrape_browser() -> Result<Vec<DiscordMessage>> {
+    let app = find_browser_app()?;
     let mut messages = Vec::new();
 
-    println!("Scraping UI...");
+    println!("Scraping browser UI...");
     scrape_messages_recursive(&app, &mut messages, 0);
 
     // Deduplicate messages
@@ -168,7 +194,6 @@ fn ensure_accessibility_permissions() -> Result<()> {
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
 
-    // Check again
     if !ax::is_process_trusted() {
         anyhow::bail!("Accessibility permissions still not granted. Please enable and try again.");
     }
@@ -198,24 +223,19 @@ fn main() -> Result<()> {
 
         println!("Waiting for browser to load...");
         thread::sleep(Duration::from_secs(5));
-
-        println!("Make sure the Discord tab is focused in your browser.");
-        println!("Press Enter when ready to scrape...");
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
     } else {
         println!("Usage: scrape-cidre <discord-url>");
         println!("Example: scrape-cidre https://discord.com/channels/1255148501793243136/1255148503081156642");
         println!();
-        println!("Or make sure Discord (app or browser) is focused and run without arguments.");
+        println!("Running without URL - will scrape current browser window.");
         println!();
     }
 
-    let messages = scrape_focused_app()?;
+    let messages = scrape_browser()?;
     println!("Found {} text elements", messages.len());
 
     if messages.is_empty() {
-        println!("No messages found. Make sure Discord is visible.");
+        println!("No messages found. Make sure Discord is visible in the browser.");
         return Ok(());
     }
 
