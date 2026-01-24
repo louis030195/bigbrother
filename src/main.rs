@@ -106,12 +106,6 @@ fn scrape_messages_recursive(
 }
 
 fn scrape_focused_app() -> Result<Vec<DiscordMessage>> {
-    if !ax::is_process_trusted() {
-        println!("Requesting accessibility permissions...");
-        ax::is_process_trusted_with_prompt(true);
-        anyhow::bail!("Please grant accessibility permissions in System Settings > Privacy & Security > Accessibility, then try again.");
-    }
-
     // Retry a few times in case app isn't focused yet
     let mut app = None;
     for attempt in 1..=5 {
@@ -155,12 +149,43 @@ fn save_to_csv(messages: &[DiscordMessage], path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+fn ensure_accessibility_permissions() -> Result<()> {
+    if ax::is_process_trusted() {
+        println!("✓ Accessibility permissions granted");
+        return Ok(());
+    }
+
+    println!("⚠ Accessibility permissions required!");
+    println!();
+    println!("Opening System Settings...");
+    ax::is_process_trusted_with_prompt(true);
+
+    println!("Please enable accessibility for this terminal in:");
+    println!("  System Settings > Privacy & Security > Accessibility");
+    println!();
+    println!("After granting permission, press Enter to continue...");
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+
+    // Check again
+    if !ax::is_process_trusted() {
+        anyhow::bail!("Accessibility permissions still not granted. Please enable and try again.");
+    }
+
+    println!("✓ Accessibility permissions granted");
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
     println!("Discord Scraper using macOS Accessibility APIs");
     println!("===============================================");
     println!();
+
+    // Check permissions first
+    ensure_accessibility_permissions()?;
 
     if args.len() > 1 {
         let url = &args[1];
