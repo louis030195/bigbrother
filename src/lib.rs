@@ -1,42 +1,43 @@
-//! macOS Automation Library using cidre
+//! superintelligence - macOS desktop automation for AI agents
 //!
-//! A collection of utilities for automating macOS applications using
-//! the Accessibility APIs via the cidre crate.
-//!
-//! ## Features
-//!
-//! - **accessibility**: Query and interact with UI elements
-//! - **apps**: Find and control running applications
-//! - **input**: Simulate keyboard and mouse input
-//! - **scrape**: Extract text content from application UIs
+//! Deterministic Rust primitives with structured JSON output.
+//! When things fail, AI writes more Rust to recover.
 
 pub mod accessibility;
 pub mod apps;
+pub mod desktop;
+pub mod element;
+pub mod error;
 pub mod input;
-pub mod scrape;
+pub mod locator;
+pub mod selector;
 
-pub use accessibility::*;
-pub use apps::*;
-pub use input::*;
-pub use scrape::*;
+pub use desktop::Desktop;
+pub use element::UIElement;
+pub use error::{Error, ErrorCode, Result};
+pub use locator::Locator;
+pub use selector::Selector;
 
-use anyhow::Result;
+pub mod prelude {
+    pub use crate::desktop::Desktop;
+    pub use crate::element::UIElement;
+    pub use crate::error::{Error, ErrorCode, Result};
+    pub use crate::locator::Locator;
+    pub use crate::selector::Selector;
+}
+
 use cidre::ax;
 
-/// Check and request accessibility permissions
 pub fn ensure_accessibility() -> Result<()> {
     if ax::is_process_trusted() {
         return Ok(());
     }
-
     ax::is_process_trusted_with_prompt(true);
-    anyhow::bail!(
-        "Accessibility permissions required. \
-        Enable in System Settings > Privacy & Security > Accessibility"
-    );
+    Err(Error::permission_denied(
+        "Accessibility permissions required. Enable in System Settings > Privacy & Security > Accessibility"
+    ))
 }
 
-/// Check if accessibility permissions are granted
 pub fn has_accessibility() -> bool {
     ax::is_process_trusted()
 }

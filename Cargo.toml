@@ -1,21 +1,28 @@
 [package]
-name = "mac-automator"
+name = "superintelligence"
 version = "0.1.0"
 edition = "2021"
-description = "macOS automation library using cidre accessibility APIs"
-repository = "https://github.com/louis030195/scrape-cidre"
+description = "macOS desktop automation for AI agents. Deterministic Rust primitives with structured output for AI recovery."
+repository = "https://github.com/louis030195/superintelligence"
 license = "MIT"
+keywords = ["automation", "macos", "accessibility", "ai", "agents"]
 
 [lib]
-name = "mac_automator"
+name = "superintelligence"
 path = "src/lib.rs"
 
 [[bin]]
-name = "discord-scraper"
-path = "src/bin/discord.rs"
+name = "si"
+path = "src/bin/cli.rs"
 
 [dependencies]
 cidre = { version = "0.12", features = ["ax"] }
-csv = "1.3"
-chrono = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+chrono = "0.4"
+
+[[example]]
+name = "discord_scrape"
+path = "examples/discord_scrape.rs"
