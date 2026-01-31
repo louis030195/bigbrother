@@ -6,8 +6,8 @@
 //! ## Platform Support
 //!
 //! - **macOS**: Full support via Accessibility API
+//! - **Windows**: Full support via UI Automation + SendInput
 //! - **Linux**: Coming soon (AT-SPI2)
-//! - **Windows**: Coming soon (UI Automation)
 
 pub mod error;
 pub mod platform;
@@ -27,6 +27,7 @@ pub mod locator;
 #[cfg(target_os = "macos")]
 pub mod selector;
 
+// macOS exports
 #[cfg(target_os = "macos")]
 pub use desktop::Desktop;
 #[cfg(target_os = "macos")]
@@ -36,6 +37,15 @@ pub use error::{Error, ErrorCode, Result};
 pub use locator::Locator;
 #[cfg(target_os = "macos")]
 pub use selector::Selector;
+
+// Windows exports
+#[cfg(target_os = "windows")]
+pub use platform::windows::{
+    Automation, Element, TreeWalker,
+    find_window, get_windows,
+    move_mouse, click, click_at, double_click, right_click, middle_click,
+    scroll, press_key, key_down, key_up, type_text, shortcut, vk,
+};
 
 pub mod prelude {
     #[cfg(target_os = "macos")]
@@ -47,6 +57,14 @@ pub mod prelude {
     pub use crate::locator::Locator;
     #[cfg(target_os = "macos")]
     pub use crate::selector::Selector;
+
+    #[cfg(target_os = "windows")]
+    pub use crate::platform::windows::{
+        Automation, Element, TreeWalker,
+        find_window, get_windows,
+        move_mouse, click, click_at, double_click, right_click, middle_click,
+        scroll, press_key, key_down, key_up, type_text, shortcut, vk,
+    };
 }
 
 /// Check if the process has accessibility permissions

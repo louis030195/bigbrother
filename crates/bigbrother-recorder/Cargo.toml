@@ -21,3 +21,7 @@ serde_json.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre.workspace = true
 libc.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows.workspace = true
+rdev.workspace = true

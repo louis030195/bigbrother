@@ -9,7 +9,7 @@
 //! - **Recording**: Capture all user interactions
 //! - **Replay**: Temporal manipulation of recorded workflows
 //! - **Automation**: Direct control of the desktop
-//! - **Cross-platform**: macOS now, Linux/Windows coming
+//! - **Cross-platform**: macOS and Windows (Linux coming)
 //!
 //! ## Quick Start
 //!
@@ -44,6 +44,12 @@ pub use bigbrother_recorder::{
     EventStream, RecorderConfig, RecordingHandle, Replayer, WorkflowRecorder,
 };
 
+#[cfg(target_os = "windows")]
+pub use bigbrother_recorder::{
+    EventStream, PermissionStatus, RecorderConfig, RecordingHandle, ReplayStats, Replayer,
+    WorkflowRecorder,
+};
+
 /// Prelude - import everything you need
 pub mod prelude {
     // Core automation
@@ -56,5 +62,11 @@ pub mod prelude {
     #[cfg(target_os = "macos")]
     pub use bigbrother_recorder::{
         EventStream, RecorderConfig, RecordingHandle, Replayer, WorkflowRecorder,
+    };
+
+    #[cfg(target_os = "windows")]
+    pub use bigbrother_recorder::{
+        EventStream, PermissionStatus, RecorderConfig, RecordingHandle, ReplayStats, Replayer,
+        WorkflowRecorder,
     };
 }
