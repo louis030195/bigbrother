@@ -1,0 +1,28 @@
+[package]
+name = "workflow-recorder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "macOS workflow recorder using CGEventTap and Accessibility APIs"
+keywords = ["automation", "macos", "recording", "workflow", "rpa"]
+
+[lib]
+name = "workflow_recorder"
+path = "src/lib.rs"
+
+[[bin]]
+name = "wr"
+path = "src/bin/cli.rs"
+
+[dependencies]
+cidre.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+chrono.workspace = true
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+libc = "0.2"
+ctrlc = "3.4"
