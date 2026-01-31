@@ -14,6 +14,11 @@ use std::time::Instant;
 use cidre::{cf, cg, ns};
 use cidre::cg::event::access as cg_access;
 
+// Keycodes for clipboard operations
+const KEY_C: u16 = 8;
+const KEY_X: u16 = 7;
+const KEY_V: u16 = 9;
+
 /// Recorder configuration
 #[derive(Debug, Clone)]
 pub struct RecorderConfig {
@@ -25,8 +30,6 @@ pub struct RecorderConfig {
     pub max_buffer: usize,
     /// Capture element context on clicks (slower but richer)
     pub capture_context: bool,
-    /// Clipboard poll interval in ms
-    pub clipboard_poll_ms: u64,
 }
 
 impl Default for RecorderConfig {
@@ -36,7 +39,6 @@ impl Default for RecorderConfig {
             text_timeout_ms: 300,
             max_buffer: 10000,
             capture_context: true,
-            clipboard_poll_ms: 250,
         }
     }
 }
@@ -120,7 +122,7 @@ impl WorkflowRecorder {
 
         let mut threads = Vec::new();
 
-        // Thread 1: CGEventTap for input events
+        // Thread 1: CGEventTap for input events (includes clipboard via Cmd+C/X/V)
         let tx1 = tx.clone();
         let stop1 = stop.clone();
         let config1 = self.config.clone();
@@ -133,14 +135,6 @@ impl WorkflowRecorder {
         let stop2 = stop.clone();
         threads.push(thread::spawn(move || {
             run_app_observer(tx2, stop2, start_time);
-        }));
-
-        // Thread 3: Clipboard polling
-        let tx3 = tx.clone();
-        let stop3 = stop.clone();
-        let poll_ms = self.config.clipboard_poll_ms;
-        threads.push(thread::spawn(move || {
-            run_clipboard_monitor(tx3, stop3, start_time, poll_ms);
         }));
 
         let handle = RecordingHandle {
@@ -369,8 +363,70 @@ extern "C" fn tap_callback(
         cg::EventType::KEY_DOWN => {
             let keycode = event.field_i64(cg::EventField::KEYBOARD_EVENT_KEYCODE) as u16;
 
-            // If it's a command/control combo, record as key event
-            if mods.any_modifier() {
+            // Check for clipboard operations (Cmd+C, Cmd+X, Cmd+V)
+            if mods.has_cmd() && !mods.has_ctrl() {
+                match keycode {
+                    KEY_C => {
+                        // Copy - capture clipboard after a short delay
+                        let tx = state.tx.clone();
+                        let start = state.start;
+                        std::thread::spawn(move || {
+                            // Wait for clipboard to be populated
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                            if let Some(content) = get_clipboard() {
+                                let _ = tx.try_send(Event {
+                                    t: start.elapsed().as_millis() as u64,
+                                    data: EventData::Paste { o: 'c', s: truncate(&content, 100) },
+                                });
+                            }
+                        });
+                        // Also record the key event
+                        let _ = state.tx.try_send(Event {
+                            t,
+                            data: EventData::Key { k: keycode, m: mods.0 },
+                        });
+                    }
+                    KEY_X => {
+                        // Cut - capture clipboard after a short delay
+                        let tx = state.tx.clone();
+                        let start = state.start;
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                            if let Some(content) = get_clipboard() {
+                                let _ = tx.try_send(Event {
+                                    t: start.elapsed().as_millis() as u64,
+                                    data: EventData::Paste { o: 'x', s: truncate(&content, 100) },
+                                });
+                            }
+                        });
+                        let _ = state.tx.try_send(Event {
+                            t,
+                            data: EventData::Key { k: keycode, m: mods.0 },
+                        });
+                    }
+                    KEY_V => {
+                        // Paste - capture what's being pasted
+                        if let Some(content) = get_clipboard() {
+                            let _ = state.tx.try_send(Event {
+                                t,
+                                data: EventData::Paste { o: 'v', s: truncate(&content, 100) },
+                            });
+                        }
+                        let _ = state.tx.try_send(Event {
+                            t,
+                            data: EventData::Key { k: keycode, m: mods.0 },
+                        });
+                    }
+                    _ => {
+                        // Other Cmd combo
+                        let _ = state.tx.try_send(Event {
+                            t,
+                            data: EventData::Key { k: keycode, m: mods.0 },
+                        });
+                    }
+                }
+            } else if mods.any_modifier() {
+                // Other modifier combo
                 let _ = state.tx.try_send(Event {
                     t,
                     data: EventData::Key { k: keycode, m: mods.0 },
@@ -391,6 +447,16 @@ extern "C" fn tap_callback(
     }
 
     Some(event)
+}
+
+/// Get clipboard content via pbpaste
+fn get_clipboard() -> Option<String> {
+    std::process::Command::new("pbpaste")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn get_element_context(x: f64, y: f64) -> Option<EventData> {
@@ -470,37 +536,9 @@ fn run_app_observer(tx: Sender<Event>, stop: Arc<AtomicBool>, start: Instant) {
     );
 
     // Run loop to receive notifications
-    let rl = cf::RunLoop::current();
+    let _rl = cf::RunLoop::current();
     while !stop.load(Ordering::Relaxed) {
         cf::RunLoop::run_in_mode(cf::RunLoopMode::default(), 0.1, true);
-    }
-}
-
-// ============================================================================
-// Clipboard Monitor Thread
-// ============================================================================
-
-fn run_clipboard_monitor(tx: Sender<Event>, stop: Arc<AtomicBool>, start: Instant, poll_ms: u64) {
-    // Use pbpaste command for simplicity - cidre doesn't expose NSPasteboard
-    let mut last_content = String::new();
-
-    while !stop.load(Ordering::Relaxed) {
-        std::thread::sleep(std::time::Duration::from_millis(poll_ms));
-
-        // Check clipboard via pbpaste
-        if let Ok(output) = std::process::Command::new("pbpaste").output() {
-            if output.status.success() {
-                let content = String::from_utf8_lossy(&output.stdout).to_string();
-                if content != last_content && !content.is_empty() {
-                    last_content = content.clone();
-                    let preview = truncate(&content, 100);
-                    let _ = tx.try_send(Event {
-                        t: start.elapsed().as_millis() as u64,
-                        data: EventData::Paste { o: 'c', s: preview },
-                    });
-                }
-            }
-        }
     }
 }
 
