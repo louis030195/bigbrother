@@ -593,56 +593,55 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 // ============================================================================
-// App Observer Thread
+// App/Window Observer Thread (polling-based for reliability)
 // ============================================================================
 
 fn run_app_observer(tx: Sender<Event>, stop: Arc<AtomicBool>, start: Instant) {
     let workspace = ns::Workspace::shared();
-    let mut nc = workspace.notification_center();
 
-    let tx_clone = tx.clone();
-    let start_clone = start;
+    let mut last_app: Option<String> = None;
+    let mut last_pid: i32 = 0;
+    let mut last_window: Option<String> = None;
 
-    let _guard = nc.add_observer_guard(
-        ns::workspace::notification::did_activate_app(),
-        None,
-        None,
-        move |notif| {
-            // Extract app info from notification
-            if let Some(user_info) = notif.user_info() {
-                let key = ns::workspace::notification::app_key();
-                if let Some(app) = user_info.get(key.as_ref()) {
-                    // app is NSRunningApplication
-                    let app: &ns::RunningApp = unsafe { std::mem::transmute(app) };
-                    let name = app.localized_name()
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| "?".to_string());
-                    let pid = app.pid();
-
-                    // Send app event
-                    let _ = tx_clone.try_send(Event {
-                        t: start_clone.elapsed().as_millis() as u64,
-                        data: EventData::App { n: name.clone(), p: pid },
-                    });
-
-                    // Query focused window title via accessibility
-                    let window_title = get_focused_window_title(pid);
-                    let _ = tx_clone.try_send(Event {
-                        t: start_clone.elapsed().as_millis() as u64,
-                        data: EventData::Window {
-                            a: name,
-                            w: window_title.map(|s| truncate(&s, 100)),
-                        },
-                    });
-                }
-            }
-        },
-    );
-
-    // Run loop to receive notifications
-    let _rl = cf::RunLoop::current();
     while !stop.load(Ordering::Relaxed) {
-        cf::RunLoop::run_in_mode(cf::RunLoopMode::default(), 0.1, true);
+        // Find the active (frontmost) application
+        let apps = workspace.running_apps();
+        let active_app = apps.iter().find(|app| app.is_active());
+
+        if let Some(app) = active_app {
+            let name = app.localized_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            let pid = app.pid();
+
+            // Check if app changed
+            let app_changed = last_app.as_ref() != Some(&name) || last_pid != pid;
+
+            if app_changed {
+                let _ = tx.try_send(Event {
+                    t: start.elapsed().as_millis() as u64,
+                    data: EventData::App { n: name.clone(), p: pid },
+                });
+                last_app = Some(name.clone());
+                last_pid = pid;
+            }
+
+            // Check if window changed (even within same app - catches tab switches)
+            let window_title = get_focused_window_title(pid);
+            if window_title != last_window || app_changed {
+                let _ = tx.try_send(Event {
+                    t: start.elapsed().as_millis() as u64,
+                    data: EventData::Window {
+                        a: name,
+                        w: window_title.as_ref().map(|s| truncate(s, 100)),
+                    },
+                });
+                last_window = window_title;
+            }
+        }
+
+        // Poll every 100ms
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
