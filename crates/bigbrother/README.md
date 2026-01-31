@@ -1,14 +1,16 @@
-# workflow-recorder
+# bigbrother
 
 High-performance macOS workflow recorder using CGEventTap and Accessibility APIs.
 
 ## Features
 
-- **Efficient**: 3 lightweight threads - event tap, app observer, clipboard monitor
-- **Complete capture**: Clicks, mouse moves, scrolls, keyboard, app switches, clipboard
+- **Efficient**: 2 lightweight threads - event tap + app/window observer
+- **Complete capture**: Clicks, mouse moves, scrolls, keyboard, app/window switches, clipboard
+- **Smart clipboard**: Detects Cmd+C/X/V instead of polling
 - **AI-friendly output**: Compact JSON lines format with minimal fields
 - **Replay**: Full playback using CGEventPost
 - **Context capture**: UI element info at click positions (optional)
+- **Streaming API**: Consume events in real-time from other crates
 
 ## Requirements
 
@@ -20,25 +22,25 @@ High-performance macOS workflow recorder using CGEventTap and Accessibility APIs
 
 ```bash
 # Check permissions
-wr permissions
+bb permissions
 
 # Record (Ctrl+C to stop)
-wr record -n my-workflow
+bb record -n my-workflow
 
 # Record without element context (faster)
-wr record -n fast --no-context
+bb record -n fast --no-context
 
 # List recordings
-wr list
+bb list
 
 # Show recording info
-wr show my-workflow_20240101_120000.jsonl
+bb show my-workflow_20240101_120000.jsonl
 
 # Replay at 2x speed
-wr replay my-workflow_20240101_120000.jsonl -s 2.0
+bb replay my-workflow_20240101_120000.jsonl -s 2.0
 
 # Delete
-wr delete my-workflow_20240101_120000.jsonl
+bb delete my-workflow_20240101_120000.jsonl
 ```
 
 ## Output Format
@@ -54,6 +56,7 @@ Events are stored as JSON lines (`.jsonl`). Each event has:
 {"t":200,"e":"k","k":0,"m":8}
 {"t":250,"e":"t","s":"hello world"}
 {"t":300,"e":"a","n":"Safari","p":1234}
+{"t":310,"e":"w","a":"Safari","w":"GitHub - bigbrother"}
 {"t":350,"e":"p","o":"c","s":"copied text"}
 {"t":400,"e":"x","r":"AXButton","n":"Submit"}
 ```
@@ -65,15 +68,16 @@ Event types:
 - `k`: key press (keycode, modifiers)
 - `t`: text input (aggregated string)
 - `a`: app switch (name, pid)
-- `p`: clipboard (operation, preview)
+- `w`: window focus (app name, window title)
+- `p`: clipboard (operation: c=copy, x=cut, v=paste)
 - `x`: context (role, name, value)
 
 ## Library Usage
 
 ```rust
-use workflow_recorder::prelude::*;
+use bigbrother::prelude::*;
 
-// Record
+// Record to workflow
 let recorder = WorkflowRecorder::new();
 let (mut workflow, handle) = recorder.start("demo")?;
 
@@ -92,11 +96,36 @@ let replayer = Replayer::new().speed(2.0);
 replayer.play(&workflow)?;
 ```
 
+## Streaming API
+
+Consume events in real-time from other crates:
+
+```rust
+use bigbrother::prelude::*;
+
+let recorder = WorkflowRecorder::new();
+let stream = recorder.stream()?;
+
+// As iterator
+for event in stream {
+    println!("{:?}", event);
+}
+
+// Or via receiver for crossbeam select!
+let stream = recorder.stream()?;
+let rx = stream.receiver();
+loop {
+    match rx.recv_timeout(Duration::from_secs(1)) {
+        Ok(event) => println!("{:?}", event),
+        Err(_) => break,
+    }
+}
+```
+
 ## Architecture
 
-Three parallel threads:
-1. **Event Tap** (CGEventTap): Mouse/keyboard capture, runs CFRunLoop
-2. **App Observer** (NSWorkspace): App activation notifications
-3. **Clipboard Monitor**: Polls pbpaste every 250ms
+Two parallel threads:
+1. **Event Tap** (CGEventTap): Mouse/keyboard/clipboard capture via CFRunLoop
+2. **App Observer**: Polls frontmost app every 100ms for app/window changes
 
-Events flow through a lock-free channel to the main thread.
+Events flow through a lock-free crossbeam channel.

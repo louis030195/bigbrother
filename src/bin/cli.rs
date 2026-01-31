@@ -1,16 +1,16 @@
-//! si - superintelligence CLI
+//! bbc - bigbrother-core CLI
 //!
 //! macOS desktop automation for AI agents.
 //! All commands output JSON for structured parsing.
 
 use clap::{Parser, Subcommand};
 use serde::Serialize;
-use superintelligence::prelude::*;
-use superintelligence::input;
+use bigbrother_core::prelude::*;
+use bigbrother_core::input;
 
 #[derive(Parser)]
-#[command(name = "si")]
-#[command(about = "superintelligence - macOS desktop automation for AI agents")]
+#[command(name = "bbc")]
+#[command(about = "bigbrother-core - macOS desktop automation for AI agents")]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -162,7 +162,7 @@ struct Output<T: Serialize> {
     #[serde(skip_serializing_if = "Option::is_none")]
     data: Option<T>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<superintelligence::error::Error>,
+    error: Option<bigbrother_core::error::Error>,
 }
 
 impl<T: Serialize> Output<T> {
@@ -174,7 +174,7 @@ impl<T: Serialize> Output<T> {
         }
     }
 
-    fn err(e: superintelligence::error::Error) -> Output<()> {
+    fn err(e: bigbrother_core::error::Error) -> Output<()> {
         Output {
             success: false,
             data: None,
@@ -209,7 +209,7 @@ fn key_name_to_code(name: &str) -> Option<u8> {
 fn main() {
     let cli = Cli::parse();
 
-    let result: std::result::Result<(), superintelligence::error::Error> = (|| {
+    let result: std::result::Result<(), bigbrother_core::error::Error> = (|| {
         match cli.command {
             Commands::Apps => {
                 let desktop = Desktop::new()?;

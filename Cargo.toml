@@ -6,10 +6,10 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/louis030195/superintelligence"
+repository = "https://github.com/louis030195/bigbrother"
 
 [workspace.dependencies]
-cidre = { version = "0.12", features = ["ax", "cg", "blocks", "ns", "app"] }
+cidre = { version = "0.13", features = ["ax", "cg", "blocks", "ns", "app"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
@@ -17,7 +17,7 @@ clap = { version = "4.5", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 [package]
-name = "superintelligence"
+name = "bigbrother-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -26,11 +26,11 @@ description = "macOS desktop automation for AI agents. Deterministic Rust primit
 keywords = ["automation", "macos", "accessibility", "ai", "agents"]
 
 [lib]
-name = "superintelligence"
+name = "bigbrother_core"
 path = "src/lib.rs"
 
 [[bin]]
-name = "si"
+name = "bbc"
 path = "src/bin/cli.rs"
 
 [dependencies]

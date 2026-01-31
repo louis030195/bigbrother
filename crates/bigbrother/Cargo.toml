@@ -1,5 +1,5 @@
 [package]
-name = "workflow-recorder"
+name = "bigbrother"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,11 +8,11 @@ description = "macOS workflow recorder using CGEventTap and Accessibility APIs"
 keywords = ["automation", "macos", "recording", "workflow", "rpa"]
 
 [lib]
-name = "workflow_recorder"
+name = "bigbrother"
 path = "src/lib.rs"
 
 [[bin]]
-name = "wr"
+name = "bb"
 path = "src/bin/cli.rs"
 
 [dependencies]

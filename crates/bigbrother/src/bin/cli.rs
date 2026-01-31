@@ -1,15 +1,15 @@
-//! Workflow Recorder CLI
+//! BigBrother CLI
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use workflow_recorder::prelude::*;
+use bigbrother::prelude::*;
 
 #[derive(Parser)]
-#[command(name = "wr")]
-#[command(about = "macOS Workflow Recorder - Record and replay user interactions")]
+#[command(name = "bb")]
+#[command(about = "BigBrother - macOS Workflow Recorder")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
