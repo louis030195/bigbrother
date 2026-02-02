@@ -166,12 +166,17 @@ pub fn scroll_up_in_app(app_name: &str, pages: u32, delay_ms: u64) -> Result<()>
 }
 
 /// Click at screen coordinates
-pub fn click_at(x: i32, y: i32) -> Result<()> {
+/// button: "left", "right", or "double"
+pub fn click_at(x: i32, y: i32, button: &str) -> Result<()> {
+    let click_cmd = match button.to_lowercase().as_str() {
+        "right" => format!("rc:{},{}", x, y),
+        "double" => format!("dc:{},{}", x, y),
+        _ => format!("c:{},{}", x, y), // left click default
+    };
+    
     let script = format!(
-        r#"
-        do shell script "cliclick c:{},{}"
-        "#,
-        x, y
+        r#"do shell script "cliclick {}""#,
+        click_cmd
     );
 
     // Note: requires cliclick to be installed (brew install cliclick)

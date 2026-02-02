@@ -201,15 +201,73 @@ enum Commands {
         /// Key (e.g., "c" for cmd+c)
         key: String,
 
-        /// Modifier: cmd, ctrl, alt, shift
+        /// Modifiers: cmd, ctrl, alt, shift (comma-separated for multiple)
         #[arg(long, default_value = "cmd")]
-        modifier: String,
+        modifiers: String,
     },
 
     /// Activate (focus) an application
     Activate {
         /// Application name
         app: String,
+    },
+
+    /// Click at screen coordinates
+    ClickAt {
+        /// X coordinate
+        x: i32,
+
+        /// Y coordinate
+        y: i32,
+
+        /// Click type: left, right, double
+        #[arg(long, default_value = "left")]
+        button: String,
+    },
+
+    /// Send text to an app (activate, type, press enter)
+    Send {
+        /// Text to send
+        text: String,
+
+        /// Application name
+        #[arg(long)]
+        app: String,
+
+        /// Don't press enter after typing
+        #[arg(long)]
+        no_enter: bool,
+    },
+
+    /// WezTerm pane control
+    Wezterm {
+        #[command(subcommand)]
+        action: WeztermAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum WeztermAction {
+    /// List all panes
+    List,
+
+    /// Send text to a specific pane
+    Send {
+        /// Pane ID
+        pane_id: u32,
+
+        /// Text to send
+        text: String,
+
+        /// Don't press enter after typing
+        #[arg(long)]
+        no_enter: bool,
+    },
+
+    /// Activate a pane
+    Focus {
+        /// Pane ID
+        pane_id: u32,
     },
 }
 
@@ -428,19 +486,22 @@ fn main() {
                 Ok(())
             })
         }
-        Commands::Shortcut { key, modifier } => {
+        Commands::Shortcut { key, modifiers } => {
             run_automation(|| {
-                let mods: Vec<&str> = match modifier.to_lowercase().as_str() {
-                    "cmd" | "command" => vec!["command"],
-                    "ctrl" | "control" => vec!["control"],
-                    "alt" | "option" => vec!["option"],
-                    "shift" => vec!["shift"],
-                    _ => vec!["command"],
-                };
+                let mods: Vec<&str> = modifiers
+                    .split(',')
+                    .map(|m| match m.trim().to_lowercase().as_str() {
+                        "cmd" | "command" => "command",
+                        "ctrl" | "control" => "control",
+                        "alt" | "option" => "option",
+                        "shift" => "shift",
+                        _ => "command",
+                    })
+                    .collect();
                 input::shortcut(&key, &mods).map_err(Error::from)?;
                 print_json(&Output::ok(serde_json::json!({
                     "key": key,
-                    "modifier": modifier
+                    "modifiers": modifiers
                 })));
                 Ok(())
             })
@@ -452,6 +513,92 @@ fn main() {
                 print_json(&Output::ok(serde_json::json!({"activated": app})));
                 Ok(())
             })
+        }
+        Commands::ClickAt { x, y, button } => {
+            run_automation(|| {
+                input::click_at(x, y, &button).map_err(Error::from)?;
+                print_json(&Output::ok(serde_json::json!({
+                    "clicked": {"x": x, "y": y, "button": button}
+                })));
+                Ok(())
+            })
+        }
+        Commands::Send { text, app, no_enter } => {
+            run_automation(|| {
+                let desktop = Desktop::new()?;
+                desktop.activate(&app)?;
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                desktop.type_text(&text)?;
+                if !no_enter {
+                    input::press_key(input::key_codes::RETURN).map_err(Error::from)?;
+                }
+                print_json(&Output::ok(serde_json::json!({
+                    "sent": text,
+                    "app": app,
+                    "enter": !no_enter
+                })));
+                Ok(())
+            })
+        }
+        Commands::Wezterm { action } => {
+            match action {
+                WeztermAction::List => {
+                    let output = std::process::Command::new("/Applications/WezTerm.app/Contents/MacOS/wezterm")
+                        .args(["cli", "list", "--format", "json"])
+                        .output();
+                    match output {
+                        Ok(out) => {
+                            let json: serde_json::Value = serde_json::from_slice(&out.stdout)
+                                .unwrap_or(serde_json::json!({"raw": String::from_utf8_lossy(&out.stdout)}));
+                            print_json(&Output::ok(json));
+                        }
+                        Err(e) => {
+                            print_json(&Output::<()>::err(Error::new(ErrorCode::Unknown, format!("Failed to run wezterm cli: {}", e))));
+                        }
+                    }
+                    Ok(())
+                }
+                WeztermAction::Send { pane_id, text, no_enter } => {
+                    run_automation(|| {
+                        // Activate pane
+                        std::process::Command::new("/Applications/WezTerm.app/Contents/MacOS/wezterm")
+                            .args(["cli", "activate-pane", "--pane-id", &pane_id.to_string()])
+                            .output()
+                            .map_err(|e| Error::new(ErrorCode::Unknown, format!("Failed to activate pane: {}", e)))?;
+                        
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                        
+                        // Type text
+                        let desktop = Desktop::new()?;
+                        desktop.type_text(&text)?;
+                        
+                        if !no_enter {
+                            input::press_key(input::key_codes::RETURN).map_err(Error::from)?;
+                        }
+                        
+                        print_json(&Output::ok(serde_json::json!({
+                            "pane_id": pane_id,
+                            "sent": text,
+                            "enter": !no_enter
+                        })));
+                        Ok(())
+                    })
+                }
+                WeztermAction::Focus { pane_id } => {
+                    let output = std::process::Command::new("/Applications/WezTerm.app/Contents/MacOS/wezterm")
+                        .args(["cli", "activate-pane", "--pane-id", &pane_id.to_string()])
+                        .output();
+                    match output {
+                        Ok(_) => {
+                            print_json(&Output::ok(serde_json::json!({"focused": pane_id})));
+                        }
+                        Err(e) => {
+                            print_json(&Output::<()>::err(Error::new(ErrorCode::Unknown, format!("Failed to focus pane: {}", e))));
+                        }
+                    }
+                    Ok(())
+                }
+            }
         }
     };
 
