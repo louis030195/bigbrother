@@ -134,12 +134,14 @@ impl Locator {
         let timeout = Duration::from_millis(self.timeout_ms);
 
         loop {
-            match self.find() {
-                Ok(e) => return Ok(e),
-                Err(_) if start.elapsed() < timeout => {
+            match self.find_all() {
+                Ok(elements) if !elements.is_empty() => {
+                    return Ok(elements.into_iter().next().unwrap());
+                }
+                _ if start.elapsed() < timeout => {
                     std::thread::sleep(Duration::from_millis(100));
                 }
-                Err(_) => {
+                _ => {
                     return Err(Error::timeout(&self.selector.to_string(), self.timeout_ms));
                 }
             }

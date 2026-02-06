@@ -180,9 +180,20 @@ enum Commands {
         #[arg(long)]
         selector: Option<String>,
 
+        /// Application name
+        #[arg(long)]
+        app: Option<String>,
+
         /// Timeout for selector wait
         #[arg(long, default_value = "10000")]
         timeout: u64,
+    },
+
+    /// Take a screenshot and save to file
+    Screenshot {
+        /// Output file path (png)
+        #[arg(short, long, default_value = "screenshot.png")]
+        output: String,
     },
 
     /// Scrape text from an app
@@ -463,9 +474,13 @@ fn main() {
                 Ok(())
             })
         }
-        Commands::Wait { idle, selector, timeout } => {
+        Commands::Wait { idle, selector, app, timeout } => {
             run_automation(|| {
                 let desktop = Desktop::new()?;
+                let desktop = match app {
+                    Some(ref a) => desktop.in_app(a),
+                    None => desktop,
+                };
                 if let Some(ms) = idle {
                     desktop.wait_idle(ms)?;
                     print_json(&Output::ok(serde_json::json!({"waited_ms": ms})));
@@ -475,6 +490,20 @@ fn main() {
                 } else {
                     print_json(&Output::ok(serde_json::json!({"waited_ms": 0})));
                 }
+                Ok(())
+            })
+        }
+        Commands::Screenshot { output } => {
+            run_automation(|| {
+                use std::process::Command as Cmd;
+                let status = Cmd::new("screencapture")
+                    .args(["-x", &output])
+                    .status()
+                    .map_err(|e| anyhow::anyhow!("screencapture failed: {}", e))?;
+                if !status.success() {
+                    anyhow::bail!("screencapture exited with error");
+                }
+                print_json(&Output::ok(serde_json::json!({"path": output})));
                 Ok(())
             })
         }
