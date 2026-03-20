@@ -9,6 +9,40 @@ import { extractCookies } from "./cookies.js";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { execSync } from "child_process";
+
+// ── Auto-install Playwright browsers if needed ──────────────────────────
+
+async function ensureBrowser(): Promise<void> {
+  // First, check if system Chrome is available (preferred — no download needed)
+  try {
+    const { chromium } = await import("playwright");
+    const browser = await chromium.launch({ channel: "chrome", headless: true });
+    await browser.close();
+    return; // System Chrome works, no install needed
+  } catch {}
+
+  // Check if Playwright's bundled Chromium is already installed
+  try {
+    const { chromium } = await import("playwright");
+    const browser = await chromium.launch({ headless: true });
+    await browser.close();
+    return; // Bundled Chromium works
+  } catch {}
+
+  // Neither available — install Chromium automatically
+  process.stderr.write("installing chromium browser (first run only)...\n");
+  try {
+    execSync("bunx playwright install chromium", {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 120000,
+    });
+    process.stderr.write("chromium installed successfully.\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`warning: auto-install failed (${msg}). trying system chrome only.\n`);
+  }
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -357,6 +391,12 @@ async function main() {
   if (!command || command === "--help" || command === "-h") {
     printUsage();
     process.exit(0);
+  }
+
+  // Commands that need a browser — auto-install if missing
+  const browserCommands = ["open", "text", "snap", "shot", "screenshot", "eval", "scrape", "click", "type", "press", "scroll", "login", "serve"];
+  if (browserCommands.includes(command)) {
+    await ensureBrowser();
   }
 
   const site = args[1];
