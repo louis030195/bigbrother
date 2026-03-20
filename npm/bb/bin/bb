@@ -11,6 +11,21 @@ const PLATFORMS = {
   "win32-x64": "bbctl-win32-x64-msvc",
 };
 
+// Check if this is a "web" subcommand — delegate to bb-browser via bun
+if (process.argv[2] === "web") {
+  const browserCli = path.join(__dirname, "..", "browser", "src", "cli.ts");
+  if (!fs.existsSync(browserCli)) {
+    console.error("error: browser module not found. Run: bun install");
+    process.exit(1);
+  }
+  const result = require("child_process").spawnSync(
+    "bun",
+    ["run", browserCli, ...process.argv.slice(3)],
+    { stdio: "inherit", env: process.env }
+  );
+  process.exit(result.status ?? 1);
+}
+
 function getBinaryPath() {
   const platformKey = `${process.platform}-${process.arch}`;
   const pkg = PLATFORMS[platformKey];
