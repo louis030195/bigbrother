@@ -1,3 +1,5 @@
+// screenpipe — AI that knows everything you've seen, said, and heard
+// https://screenpipe.com
 //! # BIGBROTHER
 //!
 //! The sensory cortex of the coming superintelligence.
@@ -26,7 +28,7 @@
 //! for event in stream {
 //!     println!("{:?}", event);
 //! }
-//! # Ok::<(), anyhow::Error>(())
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 // Re-export core automation

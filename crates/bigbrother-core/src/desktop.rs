@@ -1,3 +1,5 @@
+// screenpipe — AI that knows everything you've seen, said, and heard
+// https://screenpipe.com
 //! Desktop - main entry point for automation
 
 use crate::apps;
@@ -159,13 +161,9 @@ impl Desktop {
             role: element.role().unwrap_or_else(|| "Unknown".to_string()),
             name: element.name(),
             title: element.title(),
-            value: element.value().map(|v| {
-                if v.len() > 100 {
-                    format!("{}...", &v[..100])
-                } else {
-                    v
-                }
-            }),
+            value: element
+                .value()
+                .map(|v| crate::observation::clipped(&v, 100)),
             depth,
             children_count: children.len(),
         };

@@ -1,3 +1,6 @@
+// screenpipe — AI that knows everything you've seen, said, and heard
+// https://screenpipe.com
+import { runtimeFor } from "./runtime.js";
 import type { BrowserSession } from "./launcher.js";
 
 /**
@@ -9,9 +12,20 @@ export async function handleMethod(
   method: string,
   params: Record<string, unknown>
 ): Promise<unknown> {
-  const { page } = session;
+  const runtime = runtimeFor(session.page);
+  return runtime.run(() => handleCommand(session, method, params));
+}
 
+async function handleCommand(session: BrowserSession, method: string, params: Record<string, unknown>): Promise<unknown> {
+  const { page } = session;
+  const runtime = runtimeFor(page);
+  if (page.isClosed()) throw new Error("Browser session is closed");
+  if (["navigate", "click", "type", "press", "evaluate", "scroll", "close"].includes(method)) runtime.invalidate();
   switch (method) {
+    case "capabilities": return { protocol: 1, source: "chromium_ax_dom", observe: true, diffs: true, element_actions: ["click", "set_value"], actions_require_revision: true, screenshot_coordinates: "viewport_css_pixels" };
+    case "observe": return runtime.observe(params);
+    case "act": return runtime.act(params as any);
+    case "click_at": return runtime.clickAt(params as any);
     case "navigate": {
       const url = requireParam<string>(params, "url");
       await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -26,21 +40,21 @@ export async function handleMethod(
       const timeout = (params.timeout as number) || 5000;
 
       if (text) {
-        await page.click(`text=${text}`, { timeout });
+        await page.getByText(text, { exact: true }).click({ timeout });
         return { clicked: { text } };
       }
 
       if (role) {
         const opts: Record<string, unknown> = {};
-        if (name) opts.name = new RegExp(name, "i");
-        const el = page.getByRole(role as any, opts).first();
+        if (name) { opts.name = name; opts.exact = true; }
+        const el = page.getByRole(role as any, opts);
         await el.scrollIntoViewIfNeeded();
         await el.click({ timeout });
         return { clicked: { role, name } };
       }
 
       if (selector) {
-        await page.click(selector, { timeout });
+        await page.locator(selector).click({ timeout });
         return { clicked: selector };
       }
 
@@ -56,8 +70,8 @@ export async function handleMethod(
 
       if (role) {
         const opts: Record<string, unknown> = {};
-        if (name) opts.name = new RegExp(name, "i");
-        const el = page.getByRole(role as any, opts).first();
+        if (name) { opts.name = name; opts.exact = true; }
+        const el = page.getByRole(role as any, opts);
         await el.scrollIntoViewIfNeeded();
         await el.click();
         if (humanlike) {
@@ -69,7 +83,7 @@ export async function handleMethod(
       }
 
       if (selector) {
-        await page.fill(selector, text);
+        await page.locator(selector).fill(text);
         return { typed: text, selector };
       }
 
@@ -89,16 +103,13 @@ export async function handleMethod(
     }
 
     case "screenshot": {
-      const path = (params.path as string) || undefined;
-      const buffer = await page.screenshot({
-        path,
-        fullPage: (params.fullPage as boolean) || false,
-      });
-      return {
-        path: path || null,
-        size: buffer.length,
-        base64: path ? undefined : buffer.toString("base64"),
-      };
+      const path = params.path as string | undefined;
+      if (params.fullPage) {
+        runtime.invalidate();
+        const buffer = await page.screenshot({ path, fullPage: true });
+        return { path: path ?? null, base64: path ? undefined : buffer.toString("base64"), coordinate_input: false };
+      }
+      return runtime.screenshot(path);
     }
 
     case "evaluate": {
@@ -112,27 +123,26 @@ export async function handleMethod(
     }
 
     case "text": {
-      const text = await page.evaluate(() => {
-        const remove = document.querySelectorAll("script, style, noscript, svg, img, link, meta");
-        remove.forEach((el) => el.remove());
-        return document.body?.innerText || "";
-      });
-      return { text, url: page.url(), title: await page.title() };
+      const text = await page.locator("body").innerText();
+      const max = typeof params.maxChars === "number" ? params.maxChars : 32000;
+      if (!Number.isInteger(max) || max < 1 || max > 1000000) throw new Error("Invalid maxChars");
+      const chars = Array.from(text);
+      return { text: chars.slice(0, max).join(""), truncated: chars.length > max, url: page.url(), title: await page.title() };
     }
 
     case "snapshot": {
-      const selector = (params.selector as string) || "body";
-      const timeout = (params.timeout as number) || 10000;
-      const locator = page.locator(selector);
-      const snapshot = await locator.ariaSnapshot({ timeout });
-      return { snapshot, url: page.url() };
+      if (params.selector || params.raw) {
+        runtime.invalidate();
+        return { snapshot: await page.locator((params.selector as string) || "body").ariaSnapshot({ timeout: 10000 }), source: "playwright_aria", actionable_references: false, url: page.url() };
+      }
+      return runtime.observe(params);
     }
 
     case "find": {
       const role = requireParam<string>(params, "role");
       const name = params.name as string | undefined;
       const opts: Record<string, unknown> = {};
-      if (name) opts.name = new RegExp(name, "i");
+      if (name) { opts.name = name; opts.exact = true; }
 
       const elements = await page.getByRole(role as any, opts).all();
       const results = [];
@@ -177,8 +187,8 @@ export async function handleMethod(
 
       if (role) {
         const opts: Record<string, unknown> = {};
-        if (name) opts.name = new RegExp(name, "i");
-        await page.getByRole(role as any, opts).first().waitFor({ timeout });
+        if (name) { opts.name = name; opts.exact = true; }
+        await page.getByRole(role as any, opts).waitFor({ timeout });
         return { found: { role, name } };
       }
 
@@ -211,7 +221,7 @@ export async function handleMethod(
 
     default:
       throw new Error(
-        `Unknown method: ${method}. Available: navigate, click, type, press, screenshot, evaluate, content, text, snapshot, find, find_placeholder, url, wait, scroll, cookies, close`
+        `Unknown method: ${method}. Available: capabilities, observe, act, click_at, navigate, click, type, press, screenshot, evaluate, content, text, snapshot, find, find_placeholder, url, wait, scroll, cookies, close`
       );
   }
 }

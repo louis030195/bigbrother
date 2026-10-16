@@ -1,10 +1,13 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
+// screenpipe — AI that knows everything you've seen, said, and heard
+// https://screenpipe.com
 
 import { launch } from "./launcher.js";
 import { startServer } from "./server.js";
 import { handleMethod } from "./handler.js";
 import { isSessionAlive, startSessionDaemon, sendToSession, socketPath } from "./session.js";
 import { discoverProfiles, findProfile } from "./profiles/index.js";
+import { validateSite } from "./protocol.js";
 import { extractCookies } from "./cookies.js";
 import * as fs from "fs";
 import * as path from "path";
@@ -147,7 +150,7 @@ async function cmdText(site: string, args: string[]) {
 
 async function cmdSnap(site: string, args: string[]) {
   const url = getFlag(args, "--url");
-  const result = await run(site, "snapshot", {}, { url });
+  const result = await run(site, "snapshot", { full: hasFlag(args, "--full"), raw: hasFlag(args, "--raw") }, { url });
   out(result);
 }
 
@@ -168,6 +171,12 @@ async function cmdShot(site: string, args: string[]) {
 }
 
 async function cmdClick(site: string, target: string, args: string[]) {
+  if (/^e\d+$/.test(target)) {
+    if (!isSessionAlive(site)) die("Element references require an open persistent session");
+    const revision = Number(getFlag(args, "--revision"));
+    if (!Number.isInteger(revision) || revision < 1) die("--revision from the observation is required");
+    out(await sendToSession(site, "act", { reference: target, revision, action: "click" })); return;
+  }
   const params: Record<string, unknown> = {};
   if (target.startsWith("#") || target.startsWith(".") || target.includes("[")) {
     params.selector = target;
@@ -179,6 +188,13 @@ async function cmdClick(site: string, target: string, args: string[]) {
 }
 
 async function cmdType(site: string, text: string, args: string[]) {
+  const reference = getFlag(args, "--ref");
+  if (reference) {
+    if (!isSessionAlive(site)) die("Element references require an open persistent session");
+    const revision = Number(getFlag(args, "--revision"));
+    if (!Number.isInteger(revision) || revision < 1) die("--revision from the observation is required");
+    out(await sendToSession(site, "act", { reference, revision, action: "set_value", value: text })); return;
+  }
   const selector = getFlag(args, "--selector") || getFlag(args, "-s");
   const params: Record<string, unknown> = { text };
   if (selector) params.selector = selector;
@@ -224,14 +240,11 @@ async function cmdSeed(site: string, args: string[]) {
   }
 
   // Open the site profile, inject cookies, close
+  validateSite(site);
   const profileDir = path.join(os.homedir(), ".bb-browser-profiles", site);
   fs.mkdirSync(profileDir, { recursive: true });
 
   const { chromium } = await import("playwright");
-
-  // Clean stale lock
-  const lockFile = path.join(profileDir, "SingletonLock");
-  if (fs.existsSync(lockFile)) fs.unlinkSync(lockFile);
 
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: true,
@@ -307,7 +320,7 @@ async function cmdCookies(args: string[]) {
 
 // Legacy: stdin/stdout server mode
 async function cmdServe(args: string[]) {
-  const site = args[0];
+  const site = args[0]?.startsWith("-") ? undefined : args[0];
   const browser = getFlag(args, "--browser") || "chrome";
   const url = getFlag(args, "--url");
 
@@ -345,14 +358,14 @@ Session:
 
 Read:
   text <site>       Get visible page text
-  snap <site>       Aria snapshot (structured, for AI)
+  snap <site>       Compact accessibility state (--full or --raw for legacy ARIA)
   shot <site>       Take screenshot (-o <file>  --full)
   eval <site> <js>  Evaluate JavaScript expression
   scrape <site> <url>  One-shot: navigate + text + close
 
 Interact:
-  click <site> <target>   Click element (CSS selector or text)
-  type <site> <text>      Type text (--selector <s>  --human)
+  click <site> <target>   Click element (ref + --revision, CSS selector, or text)
+  type <site> <text>      Type text (--ref <eN> --revision <N>, or --selector <s>)
   press <site> <key>      Press key (Enter, Tab, etc.)
   scroll <site>           Scroll (--up  --amount <px>)
 
@@ -395,11 +408,12 @@ async function main() {
 
   // Commands that need a browser — auto-install if missing
   const browserCommands = ["open", "text", "snap", "shot", "screenshot", "eval", "scrape", "click", "type", "press", "scroll", "login", "serve"];
-  if (browserCommands.includes(command)) {
+  if (browserCommands.includes(command) && !isSessionAlive(args[1] || "default")) {
     await ensureBrowser();
   }
 
   const site = args[1];
+  if (site && !site.startsWith("--")) validateSite(site);
   const rest = args.slice(2);
 
   switch (command) {

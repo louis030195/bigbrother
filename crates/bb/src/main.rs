@@ -1,8 +1,13 @@
+// screenpipe — AI that knows everything you've seen, said, and heard
+// https://screenpipe.com
 //! bb - BigBrother CLI
 //!
 //! Cross-platform desktop automation and workflow recording for AI agents.
 //!
 //! Supported: macOS, Windows
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod serve;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -29,6 +34,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Compact, bounded native accessibility observation
+    Observe { #[arg(long)] app: String, #[arg(long, default_value = "32")] depth: usize },
+    /// Stateful native observation/action protocol over newline-delimited JSON
+    Serve { #[arg(long)] app: String },
     // === Recording Commands ===
     /// Start recording user interactions
     Record {
@@ -68,13 +77,17 @@ enum Commands {
     Apps,
     /// Find a running browser window
     Browser,
-    /// Launch automated browser with real auth
+    /// Browser sessions and observations (same interface as the npm wrapper)
+    #[command(disable_help_flag = true)]
     Web {
-        #[command(subcommand)]
-        action: WebAction,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Get accessibility tree for an app
     Tree {
+        /// Legacy platform-specific JSON instead of a compact observation
+        #[arg(long)]
+        raw: bool,
         #[arg(long)]
         app: String,
         #[arg(long, default_value = "15")]
@@ -178,63 +191,6 @@ enum Commands {
     Wezterm {
         #[command(subcommand)]
         action: WeztermAction,
-    },
-}
-
-#[derive(Subcommand)]
-enum WebAction {
-    /// Launch browser (persistent session by default, first run needs manual login)
-    Launch {
-        /// Browser for cookie fallback: chrome, arc, brave, edge
-        #[arg(long, default_value = "chrome")]
-        browser: String,
-        /// Run in background (headless)
-        #[arg(long)]
-        headless: bool,
-        /// Navigate to this URL
-        #[arg(long)]
-        url: Option<String>,
-        /// Only extract cookies for this domain
-        #[arg(long)]
-        domain: Option<String>,
-        /// Start JSON-RPC server mode (stdin/stdout)
-        #[arg(long)]
-        server: bool,
-        /// Use cookie injection instead of persistent profile
-        #[arg(long)]
-        no_persistent: bool,
-        /// Per-site profile isolation (e.g. "linkedin", "reddit")
-        #[arg(long)]
-        site: Option<String>,
-    },
-    /// List discovered browser profiles
-    Profiles,
-    /// Show extracted cookies (for debugging)
-    Cookies {
-        #[arg(long, default_value = "chrome")]
-        browser: String,
-        #[arg(long)]
-        domain: Option<String>,
-    },
-    /// Scrape a URL headless (no window popup, persistent session)
-    Scrape {
-        /// URL to scrape
-        url: String,
-        /// Browser for cookie fallback: chrome, arc, brave, edge
-        #[arg(long, default_value = "chrome")]
-        browser: String,
-        /// Wait ms after page load before scraping
-        #[arg(long, default_value = "2000")]
-        wait: u64,
-        /// Extract full HTML instead of text
-        #[arg(long)]
-        html: bool,
-        /// Use cookie injection instead of persistent profile
-        #[arg(long)]
-        no_persistent: bool,
-        /// Per-site profile isolation (e.g. "linkedin", "reddit")
-        #[arg(long)]
-        site: Option<String>,
     },
 }
 
@@ -485,6 +441,8 @@ fn main() {
     let cli = Cli::parse();
 
     let result: Result<(), anyhow::Error> = match cli.command {
+        Commands::Observe { app, depth } => serve::observe(&app, depth),
+        Commands::Serve { app } => serve::serve(&app),
         Commands::Record { name, no_context, threshold } => record(&name, !no_context, threshold),
         Commands::Replay { file, speed } => replay(&file, speed),
         Commands::List => list(),
@@ -495,7 +453,7 @@ fn main() {
         // ── Automation (platform-dispatched) ──────────────────────────────
         Commands::Apps => run_automation(cmd_apps),
         Commands::Browser => run_automation(cmd_browser),
-        Commands::Tree { app, depth } => run_automation(move || cmd_tree(&app, depth)),
+        Commands::Tree { app, depth, raw } => if raw { run_automation(move || cmd_tree(&app, depth)) } else { serve::observe(&app, depth) },
         Commands::Find { selector, app, timeout } => run_automation(move || cmd_find(&selector, app.as_deref(), timeout)),
         Commands::Click { selector, app } => run_automation(move || cmd_click(&selector, app.as_deref())),
         Commands::Type { text, selector, app } => run_automation(move || cmd_type(&text, selector.as_deref(), app.as_deref())),
@@ -509,7 +467,7 @@ fn main() {
         Commands::Activate { app } => run_automation(move || cmd_activate(&app)),
         Commands::ClickAt { x, y, button } => run_automation(move || cmd_click_at(x, y, &button)),
         Commands::Send { text, app, no_enter } => run_automation(move || cmd_send(&text, &app, no_enter)),
-        Commands::Web { action } => cmd_web(action),
+        Commands::Web { args } => cmd_web(args),
         Commands::Wezterm { action } => cmd_wezterm(action),
     };
 
@@ -1037,114 +995,54 @@ fn cmd_send(text: &str, app: &str, no_enter: bool) -> Result<()> {
 
 // ── Web (browser automation) ────────────────────────────────────────────────
 
-fn cmd_web(action: WebAction) -> Result<()> {
-    // Find bb-browser module: check relative to this binary, then node_modules
-    let browser_cli = find_browser_module().ok_or_else(|| {
-        anyhow::anyhow!(
-            "bb-browser module not found. Install it:\n  cd browser && npm install && npm run build"
-        )
-    })?;
-
-    let mut args: Vec<String> = Vec::new();
-
-    match action {
-        WebAction::Launch { browser, headless, url, domain, server, no_persistent, site } => {
-            args.push("launch".into());
-            args.push("--browser".into());
-            args.push(browser);
-            if headless { args.push("--headless".into()); }
-            if let Some(u) = url { args.push("--url".into()); args.push(u); }
-            if let Some(d) = domain { args.push("--domain".into()); args.push(d); }
-            if server { args.push("--server".into()); }
-            if no_persistent { args.push("--no-persistent".into()); }
-            if let Some(s) = site { args.push("--site".into()); args.push(s); }
-        }
-        WebAction::Profiles => {
-            args.push("profiles".into());
-        }
-        WebAction::Cookies { browser, domain } => {
-            args.push("cookies".into());
-            args.push("--browser".into());
-            args.push(browser);
-            if let Some(d) = domain { args.push("--domain".into()); args.push(d); }
-        }
-        WebAction::Scrape { url, browser, wait, html, no_persistent, site } => {
-            args.push("scrape".into());
-            args.push("--url".into());
-            args.push(url);
-            args.push("--browser".into());
-            args.push(browser);
-            args.push("--wait".into());
-            args.push(wait.to_string());
-            if html { args.push("--html".into()); }
-            if no_persistent { args.push("--no-persistent".into()); }
-            if let Some(s) = site { args.push("--site".into()); args.push(s); }
-        }
-    }
-
-    let status = std::process::Command::new("node")
-        .arg(&browser_cli)
-        .args(&args)
+fn cmd_web(args: Vec<String>) -> Result<()> {
+    let browser_cli = find_browser_module().ok_or_else(|| anyhow::anyhow!(
+        "Browser module not found. Run from a checkout with browser/src, install bbctl, or set BB_BROWSER_CLI."
+    ))?;
+    let status = std::process::Command::new("bun")
+        .arg("run").arg(browser_cli).args(args)
         .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
-        .status();
-
-    match status {
-        Ok(s) if s.success() => Ok(()),
-        Ok(s) => {
-            let code = s.code().unwrap_or(1);
-            match code {
-                2 => eprintln!("hint: run 'bb web profiles' to see available browser profiles"),
-                3 => eprintln!("hint: install Chrome or run 'npx playwright install chromium'"),
-                4 => eprintln!("hint: allow keychain access when prompted by the system"),
-                _ => {}
-            }
-            std::process::exit(code);
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("Error: 'node' not found. Install Node.js (https://nodejs.org) or Bun (https://bun.sh)");
-            std::process::exit(1);
-        }
-        Err(e) => Err(e.into()),
-    }
+        .status().map_err(|e| anyhow::anyhow!("Could not run the browser module with Bun: {e}"))?;
+    if !status.success() { std::process::exit(status.code().unwrap_or(1)); }
+    Ok(())
 }
 
-fn find_browser_module() -> Option<String> {
-    // 1. Check relative to the binary (for development)
+fn find_browser_module() -> Option<std::path::PathBuf> {
+    if let Some(explicit) = std::env::var_os("BB_BROWSER_CLI") {
+        let path = std::path::PathBuf::from(explicit);
+        return path.is_file().then_some(path);
+    }
     if let Ok(exe) = std::env::current_exe() {
-        let repo_root = exe.parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.parent())
-            .and_then(|p| p.parent());
-        if let Some(root) = repo_root {
-            let dev_path = root.join("browser").join("dist").join("cli.js");
-            if dev_path.exists() {
-                return Some(dev_path.to_string_lossy().to_string());
-            }
+        for ancestor in exe.ancestors().skip(1).take(5) {
+            let path = ancestor.join("browser/src/cli.ts");
+            if path.is_file() { return Some(path); }
         }
     }
-
-    // 2. Check CWD/browser/dist
-    let cwd_path = std::path::PathBuf::from("browser/dist/cli.js");
-    if cwd_path.exists() {
-        return Some(cwd_path.to_string_lossy().to_string());
-    }
-
-    // 3. Try npx resolution
+    let cwd = std::path::PathBuf::from("browser/src/cli.ts");
+    if cwd.is_file() { return Some(cwd); }
     if let Ok(output) = std::process::Command::new("node")
-        .args(["-e", "console.log(require.resolve('bb-browser'))"])
-        .output()
-    {
+        .args(["-e", "console.log(require('path').join(require('path').dirname(require.resolve('bbctl/package.json')), 'browser/cli.ts'))"])
+        .output() {
         if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Some(path);
-            }
+            let path = std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+            if path.is_file() { return Some(path); }
         }
     }
-
     None
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    #[test]
+    fn web_forwards_the_browser_cli_without_a_second_command_schema() {
+        let cli = Cli::try_parse_from(["bb", "web", "snap", "demo", "--full"]).unwrap();
+        match cli.command { Commands::Web { args } => assert_eq!(args, ["snap", "demo", "--full"]), _ => panic!("wrong command") }
+        let cli = Cli::try_parse_from(["bb", "web", "--help"]).unwrap();
+        match cli.command { Commands::Web { args } => assert_eq!(args, ["--help"]), _ => panic!("wrong command") }
+    }
 }
 
 // ── WezTerm (macOS-only for now) ────────────────────────────────────────────
