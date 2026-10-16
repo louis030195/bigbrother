@@ -2,6 +2,7 @@
 // https://screenpipe.com
 import type { CDPSession, Page } from "playwright";
 import { randomUUID, createHash } from "node:crypto";
+import { extname } from "node:path";
 import {
   Renderer,
   limitsFor,
@@ -50,6 +51,7 @@ export class BrowserRuntime {
     width: number;
     height: number;
     hash: string;
+    type: "png" | "jpeg";
   };
   constructor(readonly page: Page) {
     page.on("framenavigated", () => {
@@ -291,6 +293,8 @@ export class BrowserRuntime {
       current = captured.nodes.find((n) => n.key === expected.key);
     const signature = (n: Node) =>
       JSON.stringify([
+        n.parent,
+        !!n.protected,
         n.role,
         n.name,
         n.protected ? "" : n.value,
@@ -353,6 +357,7 @@ export class BrowserRuntime {
       width: innerWidth,
       height: innerHeight,
     }));
+    const type = /\.jpe?g$/i.test(extname(path ?? "")) ? "jpeg" : "png";
     const buffer = await this.page.screenshot({ path, scale: "css" });
     if (epoch !== this.epoch)
       throw new Error("Page navigated during screenshot; capture again");
@@ -360,6 +365,7 @@ export class BrowserRuntime {
       id: randomUUID(),
       epoch,
       ...size,
+      type,
       hash: createHash("sha256").update(buffer).digest("hex"),
     };
     return {
@@ -397,8 +403,16 @@ export class BrowserRuntime {
       params.y >= shot.height
     )
       throw new Error("Coordinates are outside the captured viewport");
-    const currentImage = await this.page.screenshot({ scale: "css" });
-    if (createHash("sha256").update(currentImage).digest("hex") !== shot.hash)
+    const currentImage = await this.page.screenshot({
+      scale: "css",
+      type: shot.type,
+    });
+    // Navigation can finish while screenshot capture is awaiting the browser.
+    // Matching returned pixels alone must never authorize input into the new page.
+    if (
+      shot.epoch !== this.epoch ||
+      createHash("sha256").update(currentImage).digest("hex") !== shot.hash
+    )
       throw new Error(
         "STALE_SCREENSHOT: viewport contents changed; capture again",
       );
