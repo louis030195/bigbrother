@@ -178,7 +178,8 @@ export class Renderer {
       }
       bytes += Buffer.byteLength(line) + 1;
       lines.push([id, line]);
-      this.current.set(id, node);
+      // Flatten only presentation; action validation needs the provider parent.
+      this.current.set(id, { ...node, parent: raw.parent });
     }
     let text = lines.map(([, line]) => line).join("\n");
     if (truncated)

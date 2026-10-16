@@ -2,6 +2,9 @@
 // https://screenpipe.com
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { BrowserRuntime } from "../runtime.js";
 import { handleMethod } from "../handler.js";
 import type { BrowserSession } from "../launcher.js";
@@ -208,4 +211,76 @@ test("node budget is explicit and navigation invalidates old references", async 
       runtime.act({ revision: state.revision, reference, action: "click" }),
     ).rejects.toThrow("STALE_OBSERVATION");
   });
+});
+
+
+test("JPEG screenshot files authorize unchanged coordinate input", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bb-shot-test-"));
+  try {
+    await fixture(
+      '<button onclick="this.textContent=\'Clicked\'">Save</button>',
+      async (page, runtime) => {
+        const path = join(dir, "shot.jpeg");
+        const shot = await runtime.screenshot(path);
+        const bytes = await readFile(path);
+        expect([...bytes.subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+        await runtime.clickAt({
+          screenshot_id: shot.screenshot_id,
+          x: 20,
+          y: 15,
+        });
+        expect(await page.getByRole("button").textContent()).toBe("Clicked");
+      },
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("navigation during screenshot validation rejects matching returned pixels", async () => {
+  await fixture(
+    '<button onclick="this.textContent=\'Clicked\'">Save</button>',
+    async (page, runtime) => {
+      const shot = await runtime.screenshot();
+      const screenshot = page.screenshot.bind(page);
+      page.screenshot = async (options) => {
+        const pixels = await screenshot(options);
+        // Schedule navigation while the validation request is in flight.
+        await page.goto("data:text/html,<button>Replacement</button>");
+        return pixels;
+      };
+      await expect(
+        runtime.clickAt({ screenshot_id: shot.screenshot_id, x: 20, y: 15 }),
+      ).rejects.toThrow("STALE_SCREENSHOT");
+      expect(await page.getByRole("button").textContent()).toBe("Replacement");
+    },
+  );
+});
+
+test("reparented controls with identical names and bounds require another observation", async () => {
+  await fixture(
+    `<div role="group" aria-label="Draft"><button style="position:fixed;top:10px;left:10px" onclick="window.clicked=true">Save</button></div>
+     <div role="group" aria-label="Published"></div>`,
+    async (page, runtime) => {
+      const first = await runtime.observe();
+      const reference = ref(first.text, "button", "Save");
+      const before = await page.getByRole("button").boundingBox();
+      await page.evaluate(() =>
+        document.querySelector('[aria-label="Published"]')!
+          .append(document.querySelector("button")!),
+      );
+      expect(await page.getByRole("button").boundingBox()).toEqual(before);
+      await expect(
+        runtime.act({ revision: first.revision, reference, action: "click" }),
+      ).rejects.toThrow("STALE_OBSERVATION");
+      expect(await page.evaluate(() => (window as any).clicked)).toBeUndefined();
+      const fresh = await runtime.observe();
+      await runtime.act({
+        revision: fresh.revision,
+        reference: ref(fresh.text, "button", "Save"),
+        action: "click",
+      });
+      expect(await page.evaluate(() => (window as any).clicked)).toBe(true);
+    },
+  );
 });

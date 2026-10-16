@@ -14,13 +14,13 @@ Both native and browser sessions emit:
 
 Keep the previous full state and apply changed lines by element reference. Structural changes return a new full state, preserving child order without a complex patch language. Diffs are used only when shorter than full text. Request `full:true` after losing your baseline.
 
-References are opaque session identities, not traversal offsets. They are never recycled within the session. Navigation resets browser identity mappings. Every action requires the latest revision, validates its target again and invalidates that observation. A stale revision, detached element, changed label/value/bounds, unsupported action or ambiguous selector fails instead of selecting a different control.
+References are opaque session identities, not traversal offsets. They are never recycled within the session. Navigation resets browser identity mappings. Every action requires the latest revision, validates its target again and invalidates that observation. A stale revision, detached element, changed target/parent/label/value/bounds, unsupported action or ambiguous selector fails instead of selecting a different control.
 
 Providers can change between validation and input. The browser resolves an exact DOM object and uses a temporary unique attribute to give Playwright that same target, removing the attribute afterward. Native actions hold the freshly resolved AX/UIA handle. This narrows the race; it is not a transaction with the target application.
 
 ## Context efficiency
 
-The default limits are 2,000 visited nodes, depth 32, 200 children per element, 500 Unicode characters per label/value and 32,000 rendered bytes. Limit names in JSON are `maxNodes`, `maxDepth`, `maxChildren`, `maxTextChars`, `maxOutputBytes`. Empty structural wrappers are flattened while preserving parent relationships. Browser static-text children repeating their parent's label are removed. Protected input values are suppressed. Truncation is explicit and partial snapshots are not emitted as diffs.
+The default limits are 2,000 visited nodes, depth 32, 200 children per element, 500 Unicode characters per label/value and 32,000 rendered bytes. Limit names in JSON are `maxNodes`, `maxDepth`, `maxChildren`, `maxTextChars`, `maxOutputBytes`. Empty structural wrappers are flattened while preserving parent relationships. Browser static-text children repeating their parent's label are removed. Protected input values are suppressed. Flattening changes only presentation: the original provider parent remains part of action validation. Native states/actions are compared as sets, so property ordering and duplicates do not cause false stale errors. Truncation is explicit and partial snapshots are not emitted as diffs.
 
 These limits constrain traversal/rendering and model-facing output. Chromium still supplies its raw AX/DOM responses before local filtering, and an OS accessibility provider can block. Native capture checks a five-second traversal budget between provider calls; macOS requests a short messaging timeout and Windows configures UIA connection/transaction timeouts when available. This is not a hard end-to-end real-time guarantee.
 
@@ -49,7 +49,7 @@ The browser visits same-process iframe trees through their page CDP session and 
 {"id":2,"method":"click_at","params":{"screenshot_id":"returned-id","x":120,"y":80}}
 ```
 
-Viewport screenshots use CSS-pixel coordinates and return width/height. Coordinate input requires the latest screenshot ID, unchanged navigation epoch, viewport dimensions and viewport pixels. The screenshot is consumed by an attempt. Animation can therefore require recapture. Full-page screenshots are observation-only and do not authorize coordinate input. Any accessibility observation or other action clears the screenshot mapping.
+Viewport screenshots use CSS-pixel coordinates and return width/height. PNG and JPEG files are validated using the same encoding as the original capture. Navigation is checked again after the validation screenshot returns. Coordinate input requires the latest screenshot ID, unchanged navigation epoch, viewport dimensions and viewport pixels. The screenshot is consumed by an attempt. Animation can therefore require recapture. Full-page screenshots are observation-only and do not authorize coordinate input. Any accessibility observation or other action clears the screenshot mapping.
 
 ## Transport and packaging
 

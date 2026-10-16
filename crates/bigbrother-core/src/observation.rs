@@ -179,6 +179,7 @@ impl Renderer {
                 truncated = true;
                 continue;
             }
+            let observed_parent = node.parent.clone();
             // Parents must precede children. Unknown parents are made explicit roots.
             node.parent = node.parent.and_then(|p| parents.get(&p).cloned().flatten());
             if node.protected {
@@ -199,11 +200,11 @@ impl Renderer {
                 continue;
             }
             parents.insert(node.key.clone(), Some(node.key.clone()));
-            nodes.push(node);
+            nodes.push((node, observed_parent));
         }
         let mut lines = Vec::new();
         let mut bytes = 0;
-        for node in nodes {
+        for (mut node, observed_parent) in nodes {
             let id = self
                 .ids
                 .entry(node.key.clone())
@@ -242,6 +243,8 @@ impl Renderer {
                 break;
             }
             bytes += line.len() + 1;
+            // Preserve provider ancestry for actions even when text flattens it.
+            node.parent = observed_parent;
             self.current.insert(id.clone(), node);
             lines.push((id, line));
         }
