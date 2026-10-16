@@ -1,8 +1,9 @@
+// screenpipe — AI that knows everything you've seen, said, and heard
+// https://screenpipe.com
 //! UI Element representation with structured output
 
 use crate::accessibility::*;
 use crate::error::{Error, Result};
-use crate::input;
 use cidre::arc::R;
 use cidre::ax;
 use serde::{Deserialize, Serialize};
@@ -66,7 +67,7 @@ impl UIElement {
     }
 
     pub fn name(&self) -> Option<String> {
-        get_role_desc(&self.inner)
+        get_title(&self.inner).or_else(|| get_description(&self.inner))
     }
 
     pub fn title(&self) -> Option<String> {
@@ -89,8 +90,14 @@ impl UIElement {
     }
 
     pub fn bounds(&self) -> Option<Bounds> {
-        // TODO: implement bounds extraction from AX API
-        None
+        let p = self.inner.pos().ok()?.cg_point()?;
+        let s = self.inner.size().ok()?.cg_size()?;
+        Some(Bounds {
+            x: p.x,
+            y: p.y,
+            width: s.width,
+            height: s.height,
+        })
     }
 
     pub fn info(&self) -> ElementInfo {
@@ -131,11 +138,17 @@ impl UIElement {
     pub fn set_value(&self, text: &str) -> Result<ActionResult> {
         let start = std::time::Instant::now();
 
-        // Try to set value via AX API
-        // For now, fall back to typing
-        if let Err(e) = input::type_text(text) {
-            return Err(Error::action_failed("set_value", &e.to_string()));
+        let mut element = self.inner.clone();
+        if !element.is_settable(ax::attr::value()).unwrap_or(false) {
+            return Err(Error::action_failed(
+                "set_value",
+                "Element does not expose a writable AXValue",
+            ));
         }
+        let value = cidre::cf::String::from_str(text);
+        element
+            .set_attr(ax::attr::value(), &value)
+            .map_err(|e| Error::action_failed("set_value", &format!("{e:?}")))?;
 
         Ok(ActionResult {
             success: true,

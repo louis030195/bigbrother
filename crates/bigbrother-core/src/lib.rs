@@ -1,3 +1,5 @@
+// screenpipe — AI that knows everything you've seen, said, and heard
+// https://screenpipe.com
 //! bigbrother-core - Cross-platform desktop automation for AI agents
 //!
 //! Deterministic Rust primitives with structured JSON output.
@@ -10,7 +12,9 @@
 //! - **Linux**: Coming soon (AT-SPI2)
 
 pub mod error;
+pub mod observation;
 pub mod platform;
+pub mod runtime;
 
 #[cfg(target_os = "macos")]
 pub mod accessibility;
@@ -41,10 +45,9 @@ pub use selector::Selector;
 // Windows exports
 #[cfg(target_os = "windows")]
 pub use platform::windows::{
-    Automation, Element, TreeWalker,
-    find_window, get_windows,
-    move_mouse, click, click_at, double_click, right_click, middle_click,
-    scroll, press_key, key_down, key_up, type_text, shortcut, vk,
+    click, click_at, double_click, find_window, get_windows, key_down, key_up, middle_click,
+    move_mouse, press_key, right_click, scroll, shortcut, type_text, vk, Automation, Element,
+    TreeWalker,
 };
 
 pub mod prelude {
@@ -60,10 +63,9 @@ pub mod prelude {
 
     #[cfg(target_os = "windows")]
     pub use crate::platform::windows::{
-        Automation, Element, TreeWalker,
-        find_window, get_windows,
-        move_mouse, click, click_at, double_click, right_click, middle_click,
-        scroll, press_key, key_down, key_up, type_text, shortcut, vk,
+        click, click_at, double_click, find_window, get_windows, key_down, key_up, middle_click,
+        move_mouse, press_key, right_click, scroll, shortcut, type_text, vk, Automation, Element,
+        TreeWalker,
     };
 }
 

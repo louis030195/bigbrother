@@ -1,19 +1,22 @@
 {
   "name": "bb-browser",
   "version": "0.2.0",
-  "description": "Browser automation module for bbctl — uses bun:sqlite, no native deps",
+  "description": "Browser automation module for bbctl \u2014 uses bun:sqlite, no native deps",
   "main": "src/cli.ts",
   "bin": {
     "bb-browser": "src/cli.ts"
   },
   "scripts": {
-    "postinstall": "bunx playwright install chromium"
+    "postinstall": "bunx playwright install chromium",
+    "test": "bun test src/__tests__/observation.test.ts src/__tests__/runtime.test.ts src/__tests__/protocol.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "playwright": "^1.50.0"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
   }
 }

@@ -1,3 +1,6 @@
+// screenpipe — AI that knows everything you've seen, said, and heard
+// https://screenpipe.com
+import { validateSite } from "./protocol.js";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import * as os from "os";
 import * as path from "path";
@@ -22,6 +25,8 @@ export interface LaunchOptions {
   site?: string;
   /** Enable network request capture (used by session daemon) */
   captureNetwork?: boolean;
+  /** Explicit cookie seeding; ordinary persistent sessions reuse only their own profile. */
+  seedCookies?: boolean;
 }
 
 export interface CookieStats {
@@ -55,6 +60,7 @@ const PERSISTENT_PROFILE_DIR = path.join(os.homedir(), ".bb-browser-profile");
  *    injects cookies extracted from another browser. Fragile — many sites detect this.
  */
 export async function launch(options: LaunchOptions): Promise<BrowserSession> {
+  if (options.site) validateSite(options.site);
   const usePersistent = options.persistent !== false;
 
   if (usePersistent) {
@@ -70,12 +76,6 @@ async function launchPersistent(options: LaunchOptions): Promise<BrowserSession>
       ? path.join(os.homedir(), ".bb-browser-profiles", options.site)
       : PERSISTENT_PROFILE_DIR);
   fs.mkdirSync(profileDir, { recursive: true });
-
-  // Clean stale lock file from crashed sessions
-  const lockFile = path.join(profileDir, "SingletonLock");
-  if (fs.existsSync(lockFile)) {
-    fs.unlinkSync(lockFile);
-  }
 
   // Use system Chrome if available (better stealth), fall back to Playwright Chromium
   let channel: "chrome" | undefined = "chrome";
@@ -110,7 +110,7 @@ async function launchPersistent(options: LaunchOptions): Promise<BrowserSession>
   // Seed cookies from real browser into persistent profile
   // This makes first launch work without manual login
   const cookieStats: CookieStats = { total: 0, injected: 0, skipped: 0, errors: [] };
-  const profile = findProfile(options.browser);
+  const profile = options.seedCookies ? findProfile(options.browser) : null;
 
   if (profile) {
     const domains = options.domains;

@@ -1,3 +1,7 @@
+// screenpipe — AI that knows everything you've seen, said, and heard
+// https://screenpipe.com
+import { parseRequest, validateSite, maxRequestBytes } from "./protocol.js";
+import { runtimeFor } from "./runtime.js";
 import * as net from "net";
 import * as fs from "fs";
 import * as os from "os";
@@ -5,23 +9,30 @@ import * as path from "path";
 import { launch, type LaunchOptions, type BrowserSession } from "./launcher.js";
 import { handleMethod } from "./handler.js";
 
-const SOCKET_DIR = os.tmpdir();
+const SOCKET_DIR = path.join(os.tmpdir(), `bb-sessions-${process.getuid?.() ?? os.userInfo().username}`);
 
-export function socketPath(site: string): string {
-  return path.join(SOCKET_DIR, `bb-${site}.sock`);
+export function socketPath(site: string, platform: NodeJS.Platform = process.platform): string {
+  validateSite(site);
+  return platform === "win32" ? `\\\\.\\pipe\\bb-${os.userInfo().username}-${site}` : path.join(SOCKET_DIR, `bb-${site}.sock`);
 }
 
 function pidPath(site: string): string {
+  validateSite(site);
   return path.join(SOCKET_DIR, `bb-${site}.pid`);
 }
 
 /**
  * Check if a session daemon is alive for the given site.
- * If socket file exists, assumes alive. Commands will fail fast
- * with a clear error if the socket is actually stale.
+ * Require a live recorded PID and the transport endpoint. Connection errors
+ * still surface to the caller; an endpoint alone does not prove liveness.
  */
 export function isSessionAlive(site: string): boolean {
-  return fs.existsSync(socketPath(site));
+  try {
+    const pid = Number(fs.readFileSync(pidPath(site), "utf8"));
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    process.kill(pid, 0);
+    return process.platform === "win32" || fs.existsSync(socketPath(site));
+  } catch { return false; }
 }
 
 /**
@@ -35,8 +46,9 @@ export async function startSessionDaemon(
   const sock = socketPath(site);
   const pid = pidPath(site);
 
-  // Clean up any stale socket
-  try { fs.unlinkSync(sock); } catch {}
+  fs.mkdirSync(SOCKET_DIR, { recursive: true, mode: 0o700 });
+  if (isSessionAlive(site)) throw new Error(`Session ${site} is already running`);
+  if (process.platform !== "win32") { try { fs.unlinkSync(sock); } catch {} }
 
   const session = await launch(launchOpts);
 
@@ -48,6 +60,7 @@ export async function startSessionDaemon(
       if (url.startsWith("data:") || url.endsWith(".js") || url.endsWith(".css") ||
           url.endsWith(".png") || url.endsWith(".jpg") || url.endsWith(".svg") ||
           url.endsWith(".woff2") || url.endsWith(".woff")) return;
+      if (networkLog.length >= 1000) networkLog.shift();
       networkLog.push({
         method: req.method(),
         url,
@@ -73,9 +86,13 @@ export async function startSessionDaemon(
 
   const server = net.createServer((conn) => {
     let buffer = "";
+    conn.setEncoding("utf8");
 
     conn.on("data", (chunk) => {
       buffer += chunk.toString();
+      if (Buffer.byteLength(buffer) > maxRequestBytes) {
+        conn.end(JSON.stringify({ id: null, error: { message: "Request exceeds 1 MiB" } }) + "\n"); return;
+      }
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
 
@@ -91,6 +108,7 @@ export async function startSessionDaemon(
     conn.on("error", () => {}); // ignore client disconnect
   });
 
+  server.on("error", async (error) => { await session.cleanup(); process.stderr.write(`${error.message}\n`); process.exitCode = 1; });
   server.listen(sock, () => {
     fs.writeFileSync(pid, String(process.pid));
     // Signal readiness to CLI
@@ -123,10 +141,10 @@ async function handleRequest(
   networkLog: NetworkEntry[],
   line: string
 ): Promise<string> {
-  let req: { id: number | string; method: string; params?: Record<string, unknown> };
+  let req: ReturnType<typeof parseRequest>;
 
   try {
-    req = JSON.parse(line);
+    req = parseRequest(line);
   } catch {
     return JSON.stringify({ id: null, error: { message: "Invalid JSON" } });
   }
@@ -143,6 +161,7 @@ async function handleRequest(
 
   // Special method: close — shut down daemon
   if (req.method === "close") {
+    await runtimeFor(session.page).run(() => session.cleanup());
     const response = JSON.stringify({ id: req.id, result: { closed: true } });
     // Schedule shutdown after responding — use SIGTERM to trigger cleanup handler
     setTimeout(() => {
@@ -173,6 +192,7 @@ export function sendToSession(
   return new Promise((resolve, reject) => {
     const sock = socketPath(site);
     const conn = net.createConnection(sock);
+    conn.setEncoding("utf8");
     let data = "";
 
     conn.on("connect", () => {

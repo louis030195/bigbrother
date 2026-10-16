@@ -16,7 +16,8 @@
     "install.js"
   ],
   "scripts": {
-    "postinstall": "node install.js"
+    "postinstall": "node install.js",
+    "prepack": "node scripts/prepare-browser.cjs"
   },
   "dependencies": {
     "playwright": "^1.50.0"

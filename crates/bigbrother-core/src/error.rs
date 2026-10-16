@@ -1,3 +1,5 @@
+// screenpipe — AI that knows everything you've seen, said, and heard
+// https://screenpipe.com
 //! Structured errors for AI parsing
 
 use serde::{Deserialize, Serialize};
@@ -18,6 +20,8 @@ pub struct Error {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorCode {
+    InvalidRequest,
+    StaleObservation,
     ElementNotFound,
     Timeout,
     PermissionDenied,
@@ -68,7 +72,10 @@ impl Error {
     }
 
     pub fn app_not_running(app: &str) -> Self {
-        Self::new(ErrorCode::AppNotRunning, format!("App not running: {}", app))
+        Self::new(
+            ErrorCode::AppNotRunning,
+            format!("App not running: {}", app),
+        )
     }
 
     pub fn action_failed(action: &str, reason: &str) -> Self {
@@ -88,7 +95,10 @@ impl Error {
     pub fn multiple_matches(selector: &str, count: usize) -> Self {
         Self::new(
             ErrorCode::MultipleMatches,
-            format!("Selector '{}' matched {} elements, expected 1", selector, count),
+            format!(
+                "Selector '{}' matched {} elements, expected 1",
+                selector, count
+            ),
         )
     }
 }
